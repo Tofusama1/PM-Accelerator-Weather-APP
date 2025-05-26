@@ -1,3 +1,4 @@
+// server.js - Backend API Server
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -8,10 +9,14 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const validator = require('validator');
 require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-//CORS
+// Security middleware
+app.use(helmet());
+
+// CORS Configuration - FIXED: Only one CORS configuration
 app.use(cors({
   origin: [
     'http://localhost:3000',  // Create React App default
@@ -24,12 +29,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Security middleware
-app.use(helmet());
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
-}));
+// Body parser middleware
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiting
@@ -39,22 +39,87 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Database connection
+// Database connection - FIXED: Better connection handling
 const client = new Client({
-  host: process.env.DB_HOST,
+  host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER,
-  port: process.env.DB_PORT,
+  port: process.env.DB_PORT || 5432,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
 });
 
-// Test database connection
-client.on('connect', () => {
-  console.log('Connected to PostgreSQL database');
-});
-client.on('error', (err) => {
-  console.error('Database connection error:', err);
-});
+// Database connection with better error handling
+const connectToDatabase = async () => {
+  try {
+    await client.connect();
+    console.log('Connected to PostgreSQL database');
+    
+    // Test the connection
+    const result = await client.query('SELECT NOW()');
+    console.log('Database timestamp:', result.rows[0].now);
+    
+    return true;
+  } catch (error) {
+    console.error('Database connection error:', error.message);
+    console.error('Connection details:', {
+      host: process.env.DB_HOST || 'localhost',
+      port: process.env.DB_PORT || 5432,
+      database: process.env.DB_NAME,
+      user: process.env.DB_USER
+    });
+    throw error;
+  }
+};
+
+// Database initialization with better error handling
+const initializeDatabase = async () => {
+  try {
+    console.log('Initializing database...');
+    
+    // Create users table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Users table ready');
+    
+    // Create weather_records table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS weather_records (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        location VARCHAR(255) NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        weather_data JSONB NOT NULL,
+        maps_data JSONB DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('Weather records table ready');
+    
+    // Create indexes for better performance
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_weather_records_user_id ON weather_records(user_id);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_weather_records_location ON weather_records(location);
+    `);
+    console.log('Database indexes ready');
+    
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Database initialization error:', error.message);
+    throw error;
+  }
+};
 
 // JWT middleware for authentication
 const authenticateToken = (req, res, next) => {
@@ -72,17 +137,6 @@ const authenticateToken = (req, res, next) => {
     req.user = user;
     next();
   });
-};
-
-//connection to a Database
-const connectToDatabase = async () => {
-  try {
-    await client.connect();
-    console.log('Connected to PostgreSQL database');
-  } catch (error) {
-    console.error('Database connection error:', error);
-    throw error;
-  }
 };
 
 // Input validation middleware
@@ -118,159 +172,42 @@ const validateWeatherData = (req, res, next) => {
   next();
 };
 
-// Database initialization
-const initializeDatabase = async () => {
-  try {
-    // Create users table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        email VARCHAR(100) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    
-    // Create weather_records table without YouTube column
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS weather_records (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        location VARCHAR(255) NOT NULL,
-        start_date DATE NOT NULL,
-        end_date DATE NOT NULL,
-        weather_data JSONB NOT NULL,
-        maps_data JSONB DEFAULT '{}',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    
-    // Create indexes for better performance
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_weather_records_user_id ON weather_records(user_id);
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_weather_records_location ON weather_records(location);
-    `);
-    
-    console.log('Database initialized successfully');
-  } catch (error) {
-    console.error('Database initialization error:', error);
-  }
-};
+// Test endpoints for debugging
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
 
-// Location details function - FIXED
-const getLocationDetails = async (location) => {
+app.get('/api/test-db', async (req, res) => {
   try {
-    const API_KEY = process.env.OPENWEATHER_API_KEY;
-    if (!API_KEY) {
-      console.warn('OpenWeather API key not configured, using basic location data');
-      return {
-        city: location,
-        state: '',
-        country: 'Unknown',
-        formatted_address: location
-      };
-    }
-    
-    // Get coordinates from location using OpenWeatherMap Geocoding API
-    const geoResponse = await axios.get(
-      `http://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(location)}&limit=1&appid=${API_KEY}`
-    );
-    
-    if (geoResponse.data && geoResponse.data.length > 0) {
-      const locationData = geoResponse.data[0];
-      return {
-        city: locationData.name,
-        state: locationData.state || '',
-        country: locationData.country,
-        formatted_address: `${locationData.name}${locationData.state ? ', ' + locationData.state : ''}, ${locationData.country}`,
-        coordinates: {
-          lat: locationData.lat,
-          lon: locationData.lon
-        }
-      };
-    } else {
-      // Fallback if no data found
-      return {
-        city: location,
-        state: '',
-        country: 'Unknown',
-        formatted_address: location
-      };
-    }
+    const result = await client.query('SELECT NOW() as current_time, version() as postgres_version');
+    res.json({ 
+      status: 'Database connected successfully', 
+      current_time: result.rows[0].current_time,
+      postgres_version: result.rows[0].postgres_version
+    });
   } catch (error) {
-    console.error('Error fetching location details:', error);
-    // Return basic info if API call fails
-    return {
-      city: location,
-      state: '',
-      country: 'Unknown',
-      formatted_address: location
-    };
+    console.error('Database test error:', error);
+    res.status(500).json({ 
+      status: 'Database connection failed', 
+      error: error.message 
+    });
   }
-};
+});
 
-// Weather API integration - FIXED VERSION
-const getWeatherData = async (location, days = 5) => {
-  try {
-    const API_KEY = process.env.OPENWEATHER_API_KEY;
-    if (!API_KEY) {
-      throw new Error('OpenWeather API key not configured');
-    }
-    
-    // Get coordinates from location
-    const geoResponse = await axios.get(
-      `http://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(location)}&limit=1&appid=${API_KEY}`
-    );
-    
-    if (!geoResponse.data.length) {
-      throw new Error('Location not found');
-    }
-    
-    const { lat, lon } = geoResponse.data[0];
-    
-    // Get weather data - FIXED: Removed extra space after lat=
-    const weatherResponse = await axios.get(
-      `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
-    );
-    
-    // Process and format weather data
-    const weatherData = weatherResponse.data.list.slice(0, days * 8).map(item => ({
-      date: item.dt_txt.split(' ')[0],
-      time: item.dt_txt.split(' ')[1],
-      temperature: Math.round(item.main.temp),
-      feels_like: Math.round(item.main.feels_like),
-      humidity: item.main.humidity,
-      pressure: item.main.pressure,
-      wind_speed: item.wind.speed,
-      wind_direction: item.wind.deg,
-      weather_main: item.weather[0].main,
-      weather_description: item.weather[0].description,
-      weather_icon: item.weather[0].icon,
-      visibility: item.visibility / 1000, // Convert to km
-      clouds: item.clouds.all
-    }));
-    
-    return {
-      location: geoResponse.data[0].name,
-      country: geoResponse.data[0].country,
-      coordinates: { lat, lon },
-      weather_data: weatherData
-    };
-  } catch (error) {
-    console.error('Weather API error:', error);
-    throw new Error('Failed to fetch weather data');
-  }
-};
-
-// Auth Routes
+// FIXED: Enhanced registration route with better error handling and logging
 app.post('/api/auth/register', async (req, res) => {
   try {
-    console.log('Registration request received:', req.body);
+    console.log('Registration request received');
+    console.log('Request body:', { 
+      username: req.body.username, 
+      email: req.body.email, 
+      passwordLength: req.body.password?.length 
+    });
     
     const { username, email, password } = req.body;
     
@@ -296,43 +233,72 @@ app.post('/api/auth/register', async (req, res) => {
       });
     }
     
+    // Test database connection before proceeding
+    try {
+      await client.query('SELECT 1');
+      console.log('Database connection verified');
+    } catch (dbError) {
+      console.error('Database connection failed during registration:', dbError);
+      return res.status(500).json({ 
+        error: 'Database connection error. Please try again later.' 
+      });
+    }
+    
     // Check if user exists
     console.log('Checking if user exists...');
     const existingUser = await client.query(
-      'SELECT id FROM users WHERE username = $1 OR email = $2',
+      'SELECT id, username, email FROM users WHERE username = $1 OR email = $2',
       [username.trim(), email.toLowerCase()]
     );
     
     if (existingUser.rows.length > 0) {
-      console.log('User already exists');
-      return res.status(400).json({ 
-        error: 'Username or email already exists' 
+      const existing = existingUser.rows[0];
+      console.log('User already exists:', { 
+        id: existing.id, 
+        username: existing.username, 
+        email: existing.email 
       });
+      
+      if (existing.username === username.trim()) {
+        return res.status(400).json({ error: 'Username already exists' });
+      } else {
+        return res.status(400).json({ error: 'Email already exists' });
+      }
     }
+    
+    console.log('User does not exist, proceeding with registration');
     
     // Hash password
     console.log('Hashing password...');
     const saltRounds = 12;
     const passwordHash = await bcrypt.hash(password, saltRounds);
+    console.log('Password hashed successfully');
     
     // Create user
-    console.log('Creating user...');
+    console.log('Creating user in database...');
     const result = await client.query(
       'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, created_at',
       [username.trim(), email.toLowerCase(), passwordHash]
     );
     
     const user = result.rows[0];
-    console.log('User created successfully:', user.id);
+    console.log('User created successfully:', { 
+      id: user.id, 
+      username: user.username, 
+      email: user.email 
+    });
     
     // Generate JWT
+    console.log('Generating JWT token...');
     const token = jwt.sign(
       { userId: user.id, username: user.username },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '7d' }
     );
+    console.log('JWT token generated');
     
-    res.status(201).json({
+    // Success response
+    const response = {
       message: 'User created successfully',
       user: {
         id: user.id,
@@ -341,32 +307,60 @@ app.post('/api/auth/register', async (req, res) => {
         created_at: user.created_at
       },
       token
-    });
+    };
+    
+    console.log('Registration completed successfully');
+    res.status(201).json(response);
+    
   } catch (error) {
-    console.error('Registration error details:', error);
+    console.error('Registration error details:', {
+      message: error.message,
+      code: error.code,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
     
     // Handle specific database errors
     if (error.code === '23505') { // Unique violation
+      console.error('Database unique constraint violation');
       return res.status(400).json({ 
         error: 'Username or email already exists' 
       });
     }
     
-    if (error.code === 'ECONNREFUSED') {
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      console.error('Database connection refused');
       return res.status(500).json({ 
-        error: 'Database connection failed' 
+        error: 'Database connection failed. Please contact support.' 
       });
     }
     
+    if (error.code === '3D000') { // Invalid database name
+      console.error('Database does not exist');
+      return res.status(500).json({ 
+        error: 'Database configuration error. Please contact support.' 
+      });
+    }
+    
+    if (error.code === '28P01') { // Invalid password
+      console.error('Database authentication failed');
+      return res.status(500).json({ 
+        error: 'Database authentication error. Please contact support.' 
+      });
+    }
+    
+    // Generic server error
     res.status(500).json({ 
-      error: 'Internal server error',
+      error: 'Internal server error. Please try again later.',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
+// FIXED: Enhanced login route
 app.post('/api/auth/login', async (req, res) => {
   try {
+    console.log('Login request received for:', req.body.username);
+    
     const { username, password } = req.body;
     
     if (!username || !password) {
@@ -380,17 +374,22 @@ app.post('/api/auth/login', async (req, res) => {
     );
     
     if (result.rows.length === 0) {
+      console.log('User not found:', username);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
     const user = result.rows[0];
+    console.log('User found:', { id: user.id, username: user.username });
     
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
     
     if (!isValidPassword) {
+      console.log('Invalid password for user:', user.username);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+    
+    console.log('Password verified for user:', user.username);
     
     // Generate JWT
     const token = jwt.sign(
@@ -398,6 +397,8 @@ app.post('/api/auth/login', async (req, res) => {
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '7d' }
     );
+    
+    console.log('Login successful for user:', user.username);
     
     res.json({
       message: 'Login successful',
@@ -413,6 +414,105 @@ app.post('/api/auth/login', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Location details function
+const getLocationDetails = async (location) => {
+  try {
+    const API_KEY = process.env.OPENWEATHER_API_KEY;
+    if (!API_KEY) {
+      console.warn('OpenWeather API key not configured, using basic location data');
+      return {
+        city: location,
+        state: '',
+        country: 'Unknown',
+        formatted_address: location
+      };
+    }
+    
+    const geoResponse = await axios.get(
+      `http://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(location)}&limit=1&appid=${API_KEY}`
+    );
+    
+    if (geoResponse.data && geoResponse.data.length > 0) {
+      const locationData = geoResponse.data[0];
+      return {
+        city: locationData.name,
+        state: locationData.state || '',
+        country: locationData.country,
+        formatted_address: `${locationData.name}${locationData.state ? ', ' + locationData.state : ''}, ${locationData.country}`,
+        coordinates: {
+          lat: locationData.lat,
+          lon: locationData.lon
+        }
+      };
+    } else {
+      return {
+        city: location,
+        state: '',
+        country: 'Unknown',
+        formatted_address: location
+      };
+    }
+  } catch (error) {
+    console.error('Error fetching location details:', error);
+    return {
+      city: location,
+      state: '',
+      country: 'Unknown',
+      formatted_address: location
+    };
+  }
+};
+
+// Weather API integration
+const getWeatherData = async (location, days = 5) => {
+  try {
+    const API_KEY = process.env.OPENWEATHER_API_KEY;
+    if (!API_KEY) {
+      throw new Error('OpenWeather API key not configured');
+    }
+    
+    const geoResponse = await axios.get(
+      `http://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(location)}&limit=1&appid=${API_KEY}`
+    );
+    
+    if (!geoResponse.data.length) {
+      throw new Error('Location not found');
+    }
+    
+    const { lat, lon } = geoResponse.data[0];
+    
+    const weatherResponse = await axios.get(
+      `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
+    );
+    
+    const weatherData = weatherResponse.data.list.slice(0, days * 8).map(item => ({
+      date: item.dt_txt.split(' ')[0],
+      time: item.dt_txt.split(' ')[1],
+      temperature: Math.round(item.main.temp),
+      feels_like: Math.round(item.main.feels_like),
+      humidity: item.main.humidity,
+      pressure: item.main.pressure,
+      wind_speed: item.wind.speed,
+      wind_direction: item.wind.deg,
+      weather_main: item.weather[0].main,
+      weather_description: item.weather[0].description,
+      weather_icon: item.weather[0].icon,
+      visibility: item.visibility / 1000,
+      clouds: item.clouds.all
+    }));
+    
+    return {
+      location: geoResponse.data[0].name,
+      country: geoResponse.data[0].country,
+      coordinates: { lat, lon },
+      weather_data: weatherData
+    };
+  } catch (error) {
+    console.error('Weather API error:', error);
+    throw new Error('Failed to fetch weather data');
+  }
+};
 
 // Weather Routes (Protected)
 app.get('/api/weather/current/:location', authenticateToken, async (req, res) => {
@@ -446,7 +546,6 @@ app.post('/api/weather-records', authenticateToken, validateWeatherData, async (
     
     console.log('Creating weather record for:', { location, startDate, endDate, userId });
     
-    // Get weather data
     const start = new Date(startDate);
     const end = new Date(endDate);
     const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
@@ -455,7 +554,6 @@ app.post('/api/weather-records', authenticateToken, validateWeatherData, async (
     
     console.log('Weather and location data fetched successfully');
     
-    // Save to database
     const result = await client.query(
       `INSERT INTO weather_records (user_id, location, start_date, end_date, weather_data, maps_data)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -544,7 +642,6 @@ app.put('/api/weather-records/:id', authenticateToken, validateWeatherData, asyn
     const { location, startDate, endDate } = req.body;
     const userId = req.user.userId;
     
-    // Check if record exists and belongs to user
     const existingRecord = await client.query(
       'SELECT id FROM weather_records WHERE id = $1 AND user_id = $2',
       [id, userId]
@@ -554,14 +651,12 @@ app.put('/api/weather-records/:id', authenticateToken, validateWeatherData, asyn
       return res.status(404).json({ error: 'Weather record not found' });
     }
     
-    // Get updated weather data
     const start = new Date(startDate);
     const end = new Date(endDate);
     const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
     const weatherData = await getWeatherData(location, daysDiff);
     const mapsData = await getLocationDetails(location);
     
-    // Update record
     const result = await client.query(
       `UPDATE weather_records 
        SET location = $1, start_date = $2, end_date = $3, weather_data = $4, maps_data = $5, updated_at = CURRENT_TIMESTAMP
@@ -664,18 +759,9 @@ ${records.map(record => `  <record id="${record.id}">
   }
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
-});
-
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Unhandled error:', err.stack);
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
@@ -687,28 +773,49 @@ app.use('*', (req, res) => {
 // Initialize database and start server
 const startServer = async () => {
   try {
+    console.log('Starting server...');
+    console.log('Environment:', process.env.NODE_ENV || 'development');
+    
     // Connect to database first
     await connectToDatabase();
     await initializeDatabase();
     
     app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-      console.log(`Health check: http://localhost:${PORT}/api/health`);
-      console.log(`CORS origin: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
+      console.log(`🌟 Server running on port ${PORT}`);
+      console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+      console.log(`🔗 Database test: http://localhost:${PORT}/api/test-db`);
+      console.log(`🌐 CORS origins:`, [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:4173',
+        process.env.FRONTEND_URL
+      ].filter(Boolean));
+      console.log('Server started successfully!');
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('Failed to start server:', error.message);
+    console.error('Please check your database configuration and ensure PostgreSQL is running.');
     process.exit(1);
   }
 };
 
-startServer();
-
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
-  await client.end();
+  try {
+    await client.end();
+    console.log('Database connection closed');
+  } catch (error) {
+    console.error('Error closing database connection:', error);
+  }
   process.exit(0);
 });
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Promise Rejection:', err);
+});
+
+startServer();
 
 module.exports = app;
