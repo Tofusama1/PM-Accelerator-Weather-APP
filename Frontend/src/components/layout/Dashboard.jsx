@@ -1,4 +1,4 @@
-// pages/Dashboard.jsx
+// pages/Dashboard.jsx - Debug Version
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from "../../services/api";
@@ -19,6 +19,9 @@ const Dashboard = () => {
   const [selectedRecordId, setSelectedRecordId] = useState(null);
   const [showRecordDetails, setShowRecordDetails] = useState(false);
   
+  // Debug state
+  const [debugInfo, setDebugInfo] = useState({});
+  
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -32,48 +35,110 @@ const Dashboard = () => {
   // Load user data on component mount
   useEffect(() => {
     const userData = localStorage.getItem('user');
+    const token = localStorage.getItem('token');
+    
+    console.log('=== DEBUG INFO ===');
+    console.log('Stored user data:', userData);
+    console.log('Stored token:', token);
+    
     if (userData) {
-      setUser(JSON.parse(userData));
+      const parsedUser = JSON.parse(userData);
+      setUser(parsedUser);
+      console.log('Parsed user:', parsedUser);
+      
+      // Decode JWT token to see user ID
+      if (token) {
+        try {
+          const tokenParts = token.split('.');
+          const payload = JSON.parse(atob(tokenParts[1]));
+          console.log('JWT payload:', payload);
+          setDebugInfo(prev => ({ ...prev, jwtPayload: payload }));
+        } catch (e) {
+          console.error('Error decoding JWT:', e);
+        }
+      }
     }
   }, []);
 
   const fetchRecords = useCallback(async (page = 1, limit = recordsPerPage) => {
     setLoading(true);
     setError('');
+    
     try {
+      console.log('=== FETCHING RECORDS ===');
+      console.log('API URL:', `/api/weather-records?page=${page}&limit=${limit}`);
+      console.log('Headers:', api.defaults.headers);
+      
       const response = await api.get(`/api/weather-records?page=${page}&limit=${limit}`);
-      console.log('API Response:', response);
+      console.log('Raw API Response:', response);
+      console.log('Response data:', response.data);
+      console.log('Response status:', response.status);
+      
+      setDebugInfo(prev => ({ 
+        ...prev, 
+        apiResponse: response.data,
+        apiStatus: response.status,
+        responseStructure: {
+          hasRecords: !!response.data?.records,
+          recordsLength: response.data?.records?.length || 0,
+          hasPagination: !!response.data?.pagination,
+          isArray: Array.isArray(response.data)
+        }
+      }));
       
       // Handle paginated response structure
-      if (response && response.records) {
-        setRecords(response.records);
-        if (response.pagination) {
-          setCurrentPage(response.pagination.page);
-          setTotalPages(response.pagination.pages);
-          setTotalRecords(response.pagination.total);
+      if (response.data && response.data.records) {
+        console.log('Using paginated response structure');
+        setRecords(response.data.records);
+        if (response.data.pagination) {
+          setCurrentPage(response.data.pagination.page);
+          setTotalPages(response.data.pagination.pages);
+          setTotalRecords(response.data.pagination.total);
         }
-      } else if (Array.isArray(response)) {
+      } else if (Array.isArray(response.data)) {
         // Fallback for non-paginated response
-        setRecords(response);
-        setTotalPages(1);
-        setTotalRecords(response.length);
-      } else if (response && Array.isArray(response.data)) {
+        console.log('Using array response structure');
         setRecords(response.data);
         setTotalPages(1);
         setTotalRecords(response.data.length);
+      } else if (response.data && Array.isArray(response.data.data)) {
+        console.log('Using nested data array structure');
+        setRecords(response.data.data);
+        setTotalPages(1);
+        setTotalRecords(response.data.data.length);
+      } else {
+        console.log('Unknown response structure, setting empty records');
+        setRecords([]);
       }
     } catch (err) {
-      console.error('Fetch records error:', err);
+      console.error('=== FETCH RECORDS ERROR ===');
+      console.error('Error object:', err);
+      console.error('Error response:', err.response);
+      console.error('Error message:', err.message);
+      console.error('Error status:', err.response?.status);
+      console.error('Error data:', err.response?.data);
+      
+      setDebugInfo(prev => ({ 
+        ...prev, 
+        apiError: {
+          message: err.message,
+          status: err.response?.status,
+          data: err.response?.data,
+          headers: err.response?.headers
+        }
+      }));
+      
       setError(err.response?.data?.error || err.message || 'Failed to fetch records');
     } finally {
       setLoading(false);
     }
-  }, [ recordsPerPage]); // Include dependencies that fetchRecords uses
+  }, [recordsPerPage]);
 
   useEffect(() => {
     fetchRecords(currentPage, recordsPerPage);
   }, [currentPage, recordsPerPage, fetchRecords]);
 
+  // Rest of your component methods remain the same...
   const handleCreateSuccess = (data) => {
     console.log('handleCreateSuccess called with:', data);
     
@@ -85,11 +150,9 @@ const Dashboard = () => {
     }
     
     if (newRecord) {
-      // If we're on the first page, add the new record to the beginning
       if (currentPage === 1) {
         setRecords(prev => [newRecord, ...prev.slice(0, recordsPerPage - 1)]);
       }
-      // Refresh to get accurate pagination
       fetchRecords(currentPage, recordsPerPage);
       setShowCreateModal(false);
     } else {
@@ -134,7 +197,6 @@ const Dashboard = () => {
       setShowRecordDetails(false);
     }
     
-    // Refresh pagination after delete
     fetchRecords(currentPage, recordsPerPage);
   };
 
@@ -184,15 +246,12 @@ const Dashboard = () => {
 
   const handleRecordsPerPageChange = (newLimit) => {
     setRecordsPerPage(newLimit);
-    setCurrentPage(1); // Reset to first page when changing page size
+    setCurrentPage(1);
   };
 
   const handleLogout = () => {
-    // Clear stored user data and token
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    
-    // Redirect to login page
     navigate('/login');
   };
 
@@ -321,6 +380,25 @@ const Dashboard = () => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
+      {/* Debug Information Panel */}
+      <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+        <h3 className="text-lg font-medium text-yellow-800 mb-2">🐛 Debug Information</h3>
+        <div className="text-sm text-yellow-700 space-y-2">
+          <div><strong>User ID:</strong> {user?.id || 'Not set'}</div>
+          <div><strong>JWT User ID:</strong> {debugInfo.jwtPayload?.userId || 'Not found'}</div>
+          <div><strong>Records Count:</strong> {records.length}</div>
+          <div><strong>Total Records:</strong> {totalRecords}</div>
+          <div><strong>API Status:</strong> {debugInfo.apiStatus || 'Not called'}</div>
+          <div><strong>Has Records in Response:</strong> {debugInfo.responseStructure?.hasRecords ? 'Yes' : 'No'}</div>
+          <div><strong>Records Length:</strong> {debugInfo.responseStructure?.recordsLength || 0}</div>
+          {debugInfo.apiError && (
+            <div className="mt-2 p-2 bg-red-100 border border-red-300 rounded">
+              <strong>API Error:</strong> {JSON.stringify(debugInfo.apiError, null, 2)}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Header with user info and logout */}
       <div className="mb-6 flex justify-between items-start">
         <div>
@@ -331,7 +409,6 @@ const Dashboard = () => {
           )}
         </div>
         
-        {/* User menu */}
         <div className="flex items-center space-x-4">
           {user && (
             <div className="text-right">
@@ -399,7 +476,7 @@ const Dashboard = () => {
         <div className="text-center py-12">
           <div className="text-gray-400 mb-4">
             <svg className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m0 0V1a1 1 0 011-1h2a1 1 0 011 1v18a1 1 0 01-1 1H5a1 1 0 01-1-1V1a1 1 0 011-1h2a1 1 0 011 1v3m0 0h8m-8 0H5a1 1 0 00-1 1v3m1-4h8" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4V2a1 1 0 011-1h8a1 1 0 011 1v2m0 0V1a1 1 0 011-1h2a1 1 0 011 1v18a1 1 0 01-1-1H5a1 1 0 01-1-1V1a1 1 0 011-1h2a1 1 0 011 1v3m0 0h8m-8 0H5a1 1 0 00-1 1v3m1-4h8" />
             </svg>
           </div>
           <h3 className="text-lg font-medium text-gray-900 mb-2">No weather records found</h3>
@@ -425,7 +502,6 @@ const Dashboard = () => {
             ))}
           </div>
           
-          {/* Pagination */}
           <Pagination />
         </>
       )}
