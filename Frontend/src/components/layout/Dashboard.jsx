@@ -255,36 +255,89 @@ const Dashboard = () => {
     navigate('/login');
   };
 
-  const handleExport = async (format) => {
+const handleExport = async (format) => {
   try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`/api/export/${format}`, {
+    // Add cache-busting parameter to prevent 304 responses
+    const timestamp = new Date().getTime();
+    
+    // Use your existing api instance with responseType 'blob' for file downloads
+    const response = await api.get(`/api/export/${format}`, {
+      params: { t: timestamp },
+      responseType: 'blob', // Important: tells axios to handle binary data
       headers: {
-        Authorization: `Bearer ${token}`
+        'Cache-Control': 'no-cache'
       }
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to export ${format.toUpperCase()}`);
+    console.log('Export response:', response.status, response.headers);
+
+    // Get the filename from Content-Disposition header if available
+    const contentDisposition = response.headers['content-disposition'];
+    let filename = `weather_data.${format.toLowerCase()}`;
+    
+    if (contentDisposition) {
+      const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+      if (filenameMatch) {
+        filename = filenameMatch[1];
+      }
     }
 
-    const blob = await response.blob();
+    // Create blob from response data
+    const blob = new Blob([response.data], { 
+      type: response.headers['content-type'] || getDefaultMimeType(format)
+    });
+
+    // Create and trigger download
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `weather_data.${format}`;
+    a.download = filename;
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    a.remove();
+    
+    // Cleanup
+    document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
+
+    console.log(`Successfully exported ${format.toUpperCase()} data as ${filename}`);
+    
+    // Optional: Show success message to user
+    // setSuccessMessage(`${format.toUpperCase()} export completed successfully`);
+    
   } catch (err) {
     console.error(`Export ${format} error:`, err);
-    setError(err.message || `Export ${format.toUpperCase()} failed`);
+    
+    // Better error handling for axios errors
+    if (err.response) {
+      // Server responded with error status
+      const errorMessage = err.response.data?.error || `Server error: ${err.response.status}`;
+      setError(`Export failed: ${errorMessage}`);
+    } else if (err.request) {
+      // Request was made but no response received
+      setError('Export failed: No response from server');
+    } else {
+      // Something else happened
+      setError(err.message || `Export ${format.toUpperCase()} failed`);
+    }
   }
 };
 
+// Helper function to get default MIME types
+const getDefaultMimeType = (format) => {
+  switch (format.toLowerCase()) {
+    case 'json':
+      return 'application/json';
+    case 'csv':
+      return 'text/csv';
+    case 'xml':
+      return 'application/xml';
+    default:
+      return 'application/octet-stream';
+  }
+};
 
-  // Pagination component
+// Pagination component
   const Pagination = () => {
     const getVisiblePageNumbers = () => {
       const delta = 2;
