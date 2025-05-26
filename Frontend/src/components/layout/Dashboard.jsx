@@ -255,6 +255,35 @@ const Dashboard = () => {
     navigate('/login');
   };
 
+  const handleExport = async (format) => {
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`/api/export/${format}`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to export ${format.toUpperCase()}`);
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `weather_data.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error(`Export ${format} error:`, err);
+    setError(err.message || `Export ${format.toUpperCase()} failed`);
+  }
+};
+
+
   // Pagination component
   const Pagination = () => {
     const getVisiblePageNumbers = () => {
@@ -465,6 +494,12 @@ const Dashboard = () => {
         >
           {loading ? 'Refreshing...' : 'Refresh'}
         </button>
+      </div>
+      
+        <div className="flex space-x-2">
+          <button onClick={() => handleExport('csv')} className="bg-green-100 hover:bg-green-200 text-green-700 px-4 py-2 rounded-lg text-sm">Export CSV</button>
+          <button onClick={() => handleExport('json')} className="bg-yellow-100 hover:bg-yellow-200 text-yellow-700 px-4 py-2 rounded-lg text-sm">Export JSON</button>
+          <button onClick={() => handleExport('xml')} className="bg-purple-100 hover:bg-purple-200 text-purple-700 px-4 py-2 rounded-lg text-sm">Export XML</button>
       </div>
 
       {loading ? (
