@@ -781,10 +781,10 @@ const startServer = async () => {
     await initializeDatabase();
     
     app.listen(PORT, () => {
-      console.log(`🌟 Server running on port ${PORT}`);
-      console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-      console.log(`🔗 Database test: http://localhost:${PORT}/api/test-db`);
-      console.log(`🌐 CORS origins:`, [
+      console.log(`Server running on port ${PORT}`);
+      console.log(`Health check: http://localhost:${PORT}/api/health`);
+      console.log(`Database test: http://localhost:${PORT}/api/test-db`);
+      console.log(`CORS origins:`, [
         'http://localhost:3000',
         'http://localhost:5173',
         'http://localhost:4173',
